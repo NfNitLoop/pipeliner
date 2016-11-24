@@ -11,45 +11,47 @@
 #[cfg(test)]
 mod tests;
 
-
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, sync_channel};
 use std::thread::spawn;
 
+/// Things which implement this can be used with the Executor library.
+pub trait Executable<It, In>
+where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
+{
+    fn executor(self) -> Executor<It, In>;
+}
 
-pub struct Executor<In, Out, F>
-where In: Send + 'static, Out: Send + 'static, F: Fn(In) -> Out + Send + Sync + 'static {
-    callable: F,
+impl<It,In> Executable<It, In> for It
+where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
+{
+    fn executor(self) -> Executor<It, In> {
+        Executor {
+            input: self,
+            num_workers: 10, 
+            out_buffer: 10,
+            in_buffer: 10,
+        }
+    }
+}
+
+pub struct Executor<It: Iterator<Item=In>, In: Send + 'static> {
+    input: It,
     
     // Options:
     num_workers: usize,
     out_buffer: usize,
     in_buffer: usize,
-    
-    _pd1: PhantomData<In>,
-    _pd2: PhantomData<Out>,
 }
 
-impl<In, Out, F> Executor<In, Out, F> 
-where In: Send + 'static,  Out: Send + 'static, F: Fn(In) -> Out + Send + Sync + 'static {
-    
-    /// Create a new Executor which will run `callable` on each input.
-    pub fn new(callable: F) -> Self {
-        Executor {
-            callable: callable,
-            num_workers: 10, 
-            out_buffer: 10,
-            in_buffer: 10,
-            _pd1: PhantomData, _pd2: PhantomData,
-        }
-    }
-    
+impl<It, In> Executor<It, In>
+where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
+{
     /// Work the input, and make the results available via the ExecutorIterator.
-    pub fn work<It>(self, input: It) -> ExecutorIter<Out>
-    where It: Iterator<Item=In> + Send + 'static
+    pub fn work<F, Out>(self, callable: F) -> ExecutorIter<Out>
+    where Out: Send + 'static, F: Fn(In) -> Out + Send + Sync + 'static
     {
-        let Executor{callable, num_workers, out_buffer, in_buffer, ..} = self;
+        let Executor{input, num_workers, out_buffer, in_buffer} = self;
         
         let (input_tx, input_rx) = sync_channel(in_buffer).into_multi();
         let (output_tx, output_rx) = sync_channel(out_buffer);
