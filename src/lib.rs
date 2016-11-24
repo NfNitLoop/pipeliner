@@ -105,14 +105,53 @@ pub struct ExecutorIter<Out>
 
 impl<T> ExecutorIter<T> {
     /// Makes panics that were experienced in the worker/producer threads visible on the
-    /// consumer thread. 
+    /// consumer thread. This must be called after we've drained self.output, which ensures
+    /// that all threads are already finished.
     fn propagate_panics(&mut self) {
-        // TODO: implement me.
+        // precondition: All threads should be finished by now:
+        assert!(self.output.next().is_none());
+        
+        use std::mem;
+        let workers = mem::replace(&mut self.worker_threads, Vec::new());
+        let producers = mem::replace(&mut self.producer_threads, Vec::new());
+        for joiners in vec![workers, producers] {
+            for joiner in joiners {
+                let panic_err = match joiner.join() {
+                    Ok(_) => continue, // no error
+                    Err(err) => err,
+                };
+                let orig_msg = panic_msg_from(panic_err.as_ref());
+                panic!("Worker thread panicked with message: [{}]", orig_msg);
+            }
+        }
     }
+}
+
+use std::any::Any;
+
+/// Try to reconstruct a panic message from the original:
+// Thanks to kimundi on #rust-beginners for helping me sort this out. :) 
+fn panic_msg_from<'a>(panic_data: &'a Any) -> &'a str {    
+    
+    if let Some(msg) = panic_data.downcast_ref::<&'static str>() {
+        return msg;
+    }
+    if let Some(msg) = panic_data.downcast_ref::<String>() {
+        return msg.as_str();
+    }
+    
+    "<Unrecoverable panic message.>"
 }
 
 impl<T> std::iter::Iterator for ExecutorIter<T> {
     type Item = T;
+    
+    /// Iterates through executor results.
+    /// 
+    /// # Panics #
+    /// Note, this call will panic if any of the workre threads panicked. 
+    /// This is because, in that case, you can't be sure you've received a result for
+    /// each of your inputs.
     fn next(&mut self) -> Option<Self::Item> {
         let next = self.output.next();
         if next.is_none() {
