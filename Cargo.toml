@@ -1,0 +1,6 @@
+[package]
+name = "executor"
+version = "0.1.0"
+authors = ["Cody Casterline <cody.casterline@gmail.com>"]
+
+[dependencies]
