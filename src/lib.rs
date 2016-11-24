@@ -22,12 +22,15 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
     fn executor(self) -> Executor<It, In>;
 }
 
-impl<It,In> Executable<It, In> for It
-where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
+/// IntoIterators (and Iterators!) can be worked with an executor.
+impl<Ii,It,In> Executable<It, In> for Ii
+where Ii: IntoIterator<Item=In, IntoIter=It>,
+      It: Iterator<Item=In> + Send + 'static,
+      In: Send + 'static
 {
     fn executor(self) -> Executor<It, In> {
         Executor {
-            input: self,
+            input: self.into_iter(),
             num_workers: 10, 
             out_buffer: 10,
             in_buffer: 10,
