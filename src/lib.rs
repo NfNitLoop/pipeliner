@@ -33,7 +33,6 @@ where Ii: IntoIterator<Item=In, IntoIter=It>,
             input: self.into_iter(),
             num_workers: 10, 
             out_buffer: 10,
-            in_buffer: 10,
         }
     }
 }
@@ -44,7 +43,6 @@ pub struct Executor<It: Iterator<Item=In>, In: Send + 'static> {
     // Options:
     num_workers: usize,
     out_buffer: usize,
-    in_buffer: usize,
 }
 
 impl<It, In> Executor<It, In>
@@ -54,46 +52,34 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
     pub fn work<F, Out>(self, callable: F) -> ExecutorIter<Out>
     where Out: Send + 'static, F: Fn(In) -> Out + Send + Sync + 'static
     {
-        let Executor{input, num_workers, out_buffer, in_buffer} = self;
+        let Executor{input, num_workers, out_buffer} = self;
         
-        let (input_tx, input_rx) = sync_channel(in_buffer).into_multi();
+        let input = SharedIterator::wrap(input);
+        
         let (output_tx, output_rx) = sync_channel(out_buffer);
         let callable = Arc::new(callable);
-        
-        let in_thread = spawn(move || {
-            for value in input {
-                input_tx.send(value).unwrap();
-            }
-        });
-        
+                
         let mut iter = ExecutorIter {
             output: output_rx.into_iter(), 
             worker_threads: Vec::with_capacity(num_workers),
-            producer_threads: Vec::with_capacity(1),
         };
-        iter.producer_threads.push(in_thread);
         
         // Spawn N worker threads.
         for _ in 0..10 {
-            let input_rx = input_rx.clone();
+            let input = input.clone();
             let output_tx = output_tx.clone();
             let callable = callable.clone();
             
             iter.worker_threads.push(spawn(move || {
-                loop {
-                    let input = match input_rx.recv() {
-                        // TODO: Replace this match with an iterator.
-                        Ok(x) => x,
-                        Err(_) => break, 
-                    };
+                for value in input {
                     // TODO: Handle panics and send them down the wire.
-                    let output = callable(input);
+                    let output = callable(value);
                     let result = output_tx.send(output);
                     if result.is_err() {
                         // The receiver is closed. No need to continue.
                         break;
                     }
-                } // loop
+                } 
             })); // worker
         } // spawning threads
         iter
@@ -104,8 +90,6 @@ pub struct ExecutorIter<Out>
 {
     output: mpsc::IntoIter<Out>,
     worker_threads: Vec<std::thread::JoinHandle<()>>,
-    // In reality, only one:
-    producer_threads: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl<T> ExecutorIter<T> {
@@ -118,16 +102,13 @@ impl<T> ExecutorIter<T> {
         
         use std::mem;
         let workers = mem::replace(&mut self.worker_threads, Vec::new());
-        let producers = mem::replace(&mut self.producer_threads, Vec::new());
-        for joiners in vec![workers, producers] {
-            for joiner in joiners {
-                let panic_err = match joiner.join() {
-                    Ok(_) => continue, // no error
-                    Err(err) => err,
-                };
-                let orig_msg = panic_msg_from(panic_err.as_ref());
-                panic!("Worker thread panicked with message: [{}]", orig_msg);
-            }
+        for joiner in workers {
+            let panic_err = match joiner.join() {
+                Ok(_) => continue, // no error
+                Err(err) => err,
+            };
+            let orig_msg = panic_msg_from(panic_err.as_ref());
+            panic!("Worker thread panicked with message: [{}]", orig_msg);
         }
     }
 }
@@ -166,54 +147,34 @@ impl<T> std::iter::Iterator for ExecutorIter<T> {
     }
 }
 
-/// Implement multi-receive for multi-producer/multi-consumer channels:
-struct MultiReceiver<T> {
-    recv_mut: Arc<Mutex<mpsc::Receiver<T>>>,
+/// An iterator which can be safely shared between threads.
+struct SharedIterator<I: Iterator> {
+    iterator: Arc<Mutex<I>>,
 }
 
-impl<T> MultiReceiver<T> {
-    fn from(receiver: mpsc::Receiver<T>) -> Self {
-        MultiReceiver {
-            recv_mut: Arc::new(Mutex::new(receiver))
-        }
+// TODO: It feels weird to leak that I'm using Fuse in the impl interface here:
+impl<I: Iterator> SharedIterator<std::iter::Fuse<I>> {
+    fn wrap(iterator: I) -> Self {
+        // Since we're going to be sharing among multiple threads, each thread will need to
+        // get a None of its own to end. We need to make sure our iterator doesn't cycle:
+        let iterator = iterator.fuse(); 
+        
+        SharedIterator{iterator: Arc::new(Mutex::new(iterator))}
     }
-    
-    fn recv(&self) -> Result<T, mpsc::RecvError> {
-        let rx = self.recv_mut.lock().expect("No poisoning for MultiReceiver uses.");
-        rx.recv()
-    }
-    
-    // TODO: impl IntoIterator && Iterator
-    // TODO: Full interface of mpsc::Receiver. (Maybe as trait?)
 }
 
-impl<T> Clone for MultiReceiver<T> {
+impl<I: Iterator> Clone for SharedIterator<I> {
     fn clone(&self) -> Self {
-        MultiReceiver {
-            recv_mut: self.recv_mut.clone()
-        }
+        SharedIterator{iterator: self.iterator.clone()}
     }
 }
 
-/// Trait for things that can be converted into a MultiReceiver.
-trait IntoMultiReceiver {
-    type Output;
-    fn into_multi(self) -> Self::Output;
-}
-
-impl<T> IntoMultiReceiver for mpsc::Receiver<T> {
-    type Output = MultiReceiver<T>;
-    fn into_multi(self) -> Self::Output {
-        MultiReceiver::from(self)
-    }
-}
-
-/// For use w/ the return values from channel() and sync_channel().
-impl<S, T> IntoMultiReceiver for (S, mpsc::Receiver<T>) {
-    type Output = (S, MultiReceiver<T>);
-    fn into_multi(self) -> Self::Output {
-        let (tx, rx) = self;
-        return (tx, MultiReceiver::from(rx));
+impl<I: Iterator> Iterator for SharedIterator<I> {
+    type Item = I::Item;
+    
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut iterator = self.iterator.lock().expect("No poisoning in SharedIterator");
+        iterator.next()
     }
 }
 
