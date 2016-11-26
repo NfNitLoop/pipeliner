@@ -1,5 +1,7 @@
 use super::*;
 
+use std::{thread, time};
+
 #[test]
 fn dumb_test() {
     
@@ -31,4 +33,35 @@ fn test_panic() {
         println!("Got result: {}", result);
     }
     
+}
+
+#[test]
+fn parallel_test() {
+    let input = 0..100;
+    let results = input.executor().work(pipe_a).executor().work(pipe_b);
+    for result in results {
+        println!("result: {}", result);
+    }
+}
+
+#[test]
+fn serial_test() {
+    let input = 0..100;
+    let results = input.map(pipe_a).map(pipe_b);
+    for result in results {
+        println!("result: {}", result);
+    }
+}
+
+
+fn pipe_a(x: i32) -> i32 {
+    // Simulate some work:
+    thread::sleep(time::Duration::from_millis(20));
+    x * 2
+}
+
+fn pipe_b(x: i32) -> i32 {
+    // Simulate some work:
+    thread::sleep(time::Duration::from_millis(10));
+    x - 1
 }
