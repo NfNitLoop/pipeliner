@@ -13,7 +13,7 @@
 //! 
 //! ```
 //! use executor::Executable;
-//! for result in (0..100).with_threads(10).work(|x| x + 1) {
+//! for result in (0..100).with_threads(10).map(|x| x + 1) {
 //!     println!("result: {}", result);
 //! }
 //! ```
@@ -24,11 +24,11 @@
 //! ```
 //! use executor::Executable;
 //! // You might want a high number of threads for high-latency work:
-//! let results = (0..100).with_threads(50).work(|x| {
+//! let results = (0..100).with_threads(50).map(|x| {
 //!     x + 1 // Let's pretend this is high latency. (ex: network access)
 //! })
 //! // But you might want lower thread usage for cpu-bound work:
-//! .with_threads(4).out_buffer(100).work(|x| {
+//! .with_threads(4).out_buffer(100).map(|x| {
 //!     x * x // ow my CPUs :p
 //! }); 
 //! for result in results {
@@ -101,8 +101,10 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
         self
     }
     
-    /// Work the input, and make the results available via the ExecutorIterator.
-    pub fn work<F, Out>(self, callable: F) -> ExecutorIter<Out>
+    /// Perform work on the input, and make the results available via the ExecutorIterator.
+    /// Note that unlike in `Iterator`s, this map does not preserve the ordering of the input.
+    /// This allows results to be consumed as soon as they become available.
+    pub fn map<F, Out>(self, callable: F) -> ExecutorIter<Out>
     where Out: Send + 'static, F: Fn(In) -> Out + Send + Sync + 'static
     {
         let Executor{input, num_threads, out_buffer} = self;
