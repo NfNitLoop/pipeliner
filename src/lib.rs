@@ -1,4 +1,4 @@
-//! The Executor crate gives a high-level framework for parallel processing.
+//! This crate provides a high-level framework for parallel processing.
 //!
 //! Main features:
 //!
@@ -9,10 +9,10 @@
 //!  * `panic`s in your worker threads are propagated out of the output Iterator. (No silent
 //!     loss of data.)
 //!
-//! Since `IntoIterator`s implement [Executable], you can, for example:
+//! Since `IntoIterator`s implement [Pipeline], you can, for example:
 //! 
 //! ```
-//! use executor::Executable;
+//! use pipeliner::Pipeline;
 //! for result in (0..100).with_threads(10).map(|x| x + 1) {
 //!     println!("result: {}", result);
 //! }
@@ -22,7 +22,7 @@
 //! with varying number of threads for each step of work:
 //!
 //! ```
-//! use executor::Executable;
+//! use pipeliner::Pipeline;
 //! // You might want a high number of threads for high-latency work:
 //! let results = (0..100).with_threads(50).map(|x| {
 //!     x + 1 // Let's pretend this is high latency. (ex: network access)
@@ -36,7 +36,7 @@
 //! }
 //! ```
 //!
-//! [Executable]: trait.Executable.html
+//! [Pipeline]: trait.Pipeline.html
 
 #[cfg(test)]
 mod tests;
@@ -45,28 +45,28 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, sync_channel};
 use std::thread::spawn;
 
-/// Things which implement this can be used with the Executor library.
-pub trait Executable<It, In>
+/// Things which implement this can be used with the Pipeliner library.
+pub trait Pipeline<It, In>
 where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
 {
-    /// Returns an Executor that executes using this many threads, and 0 buffering.
-    fn with_threads(self, num_threads: usize) -> Executor<It, In>;
+    /// Returns an PipelineBuilder that will execute using this many threads, and 0 buffering.
+    fn with_threads(self, num_threads: usize) -> PipelineBuilder<It, In>;
 }
 
-/// IntoIterators (and Iterators!) can be worked with an executor.
-impl<Ii,It,In> Executable<It, In> for Ii
+/// IntoIterators (and Iterators!) can be used as a Pipeline.
+impl<Ii,It,In> Pipeline<It, In> for Ii
 where Ii: IntoIterator<Item=In, IntoIter=It>,
       It: Iterator<Item=In> + Send + 'static,
       In: Send + 'static
 {
-    fn with_threads(self, num_threads: usize) -> Executor<It, In> {
-        Executor::new(self.into_iter()).num_threads(num_threads) 
+    fn with_threads(self, num_threads: usize) -> PipelineBuilder<It, In> {
+        PipelineBuilder::new(self.into_iter()).num_threads(num_threads) 
     }
 }
 
 /// This is an intermediate data structure which allows you to configure how your pipeline
 /// should run.
-pub struct Executor<It: Iterator<Item=In>, In: Send + 'static> {
+pub struct PipelineBuilder<It: Iterator<Item=In>, In: Send + 'static> {
     // The inner iterator which yields the input values
     input: It,
     
@@ -75,12 +75,12 @@ pub struct Executor<It: Iterator<Item=In>, In: Send + 'static> {
     out_buffer: usize,
 }
 
-impl<It, In> Executor<It, In>
+impl<It, In> PipelineBuilder<It, In>
 where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
 {
     
     fn new(iterator: It) -> Self {
-        Executor {
+        PipelineBuilder {
             input: iterator,
             num_threads: 1, 
             out_buffer: 0,
@@ -101,20 +101,20 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
         self
     }
     
-    /// Perform work on the input, and make the results available via the ExecutorIterator.
+    /// Perform work on the input, and make the results available via the PipelineIterator.
     /// Note that unlike in `Iterator`s, this map does not preserve the ordering of the input.
     /// This allows results to be consumed as soon as they become available.
-    pub fn map<F, Out>(self, callable: F) -> ExecutorIter<Out>
+    pub fn map<F, Out>(self, callable: F) -> PipelineIter<Out>
     where Out: Send + 'static, F: Fn(In) -> Out + Send + Sync + 'static
     {
-        let Executor{input, num_threads, out_buffer} = self;
+        let PipelineBuilder{input, num_threads, out_buffer} = self;
         
         let input = SharedIterator::wrap(input);
         
         let (output_tx, output_rx) = sync_channel(out_buffer);
         let callable = Arc::new(callable);
                 
-        let mut iter = ExecutorIter {
+        let mut iter = PipelineIter {
             output: output_rx.into_iter(), 
             worker_threads: Vec::with_capacity(num_threads),
         };
@@ -141,13 +141,13 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
     }
 }
 
-pub struct ExecutorIter<Out>
+pub struct PipelineIter<Out>
 {
     output: mpsc::IntoIter<Out>,
     worker_threads: Vec<std::thread::JoinHandle<()>>,
 }
 
-impl<T> ExecutorIter<T> {
+impl<T> PipelineIter<T> {
     /// Makes panics that were experienced in the worker/producer threads visible on the
     /// consumer thread. This must be called after we've drained self.output, which ensures
     /// that all threads are already finished.
@@ -184,7 +184,7 @@ fn panic_msg_from<'a>(panic_data: &'a Any) -> &'a str {
     "<Unrecoverable panic message.>"
 }
 
-impl<T> std::iter::Iterator for ExecutorIter<T> {
+impl<T> std::iter::Iterator for PipelineIter<T> {
     type Item = T;
     
     /// Iterates through executor results.

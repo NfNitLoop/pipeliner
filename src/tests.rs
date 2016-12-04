@@ -6,7 +6,7 @@ use std::{thread, time};
 fn dumb_test() {
     
     let input = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 42];
-    let results = input.with_threads(10).map(|x| x + 1); // lazily collected w/ buffer.
+    let results = input.with_threads(10).map(|x| x + 1); 
     
     // Collect back into a vec: 
     let mut results: Vec<_> = results.collect();

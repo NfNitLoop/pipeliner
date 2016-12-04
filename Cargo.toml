@@ -1,6 +1,12 @@
 [package]
-name = "executor"
+name = "pipeliner"
 version = "0.1.0"
 authors = ["Cody Casterline <cody.casterline@gmail.com>"]
 
+description = "Provides a nice interface for parallel programming with iterators."
+keywords = ["pipeline", "threads", "iterators", "parallel", "parallelize", "pool"]
+repository = "https://github.com/NfNitLoop/pipeliner"
+documentation = "https://docs.rs/pipeliner/"
+
 [dependencies]
+# None! :)
