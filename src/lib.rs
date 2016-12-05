@@ -8,6 +8,7 @@
 //!  * Optionally buffer output.
 //!  * `panic`s in your worker threads are propagated out of the output Iterator. (No silent
 //!     loss of data.)
+//!  * No `unsafe` code.
 //!
 //! Since `IntoIterator`s implement [Pipeline], you can, for example:
 //! 
@@ -40,10 +41,13 @@
 
 #[cfg(test)]
 mod tests;
+mod panic_guard;
 
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, sync_channel};
 use std::thread::spawn;
+
+use panic_guard::*;
 
 /// Things which implement this can be used with the Pipeliner library.
 pub trait Pipeline<It, In>
@@ -104,7 +108,7 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
     /// Perform work on the input, and make the results available via the PipelineIterator.
     /// Note that unlike in `Iterator`s, this map does not preserve the ordering of the input.
     /// This allows results to be consumed as soon as they become available.
-    pub fn map<F, Out>(self, callable: F) -> PipelineIter<Out>
+    pub fn map<F, Out>(self, callable: F) -> PipelineIter<Result<Out,()>>
     where Out: Send + 'static, F: Fn(In) -> Out + Send + Sync + 'static
     {
         let PipelineBuilder{input, num_threads, out_buffer} = self;
@@ -115,14 +119,14 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
         let callable = Arc::new(callable);
                 
         let mut iter = PipelineIter {
-            output: output_rx.into_iter(), 
+            output: Some(output_rx.into_iter()), 
             worker_threads: Vec::with_capacity(num_threads),
         };
         
         // Spawn N worker threads.
         for _ in 0..num_threads {
             let input = input.clone();
-            let output_tx = output_tx.clone();
+            let output_tx = PanicGuard::new(output_tx.clone());
             let callable = callable.clone();
             
             iter.worker_threads.push(spawn(move || {
@@ -143,19 +147,21 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
 
 pub struct PipelineIter<Out>
 {
-    output: mpsc::IntoIter<Out>,
+    // This is optional because we may want to drop it to cause our threads to die gracefully:
+    output: Option<mpsc::IntoIter<Out>>,
     worker_threads: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl<T> PipelineIter<T> {
     /// Makes panics that were experienced in the worker/producer threads visible on the
-    /// consumer thread. This must be called after we've drained self.output, which ensures
-    /// that all threads are already finished.
+    /// consumer thread. Calling this function ends output -- we will wait for threads to finish
+    /// and propagate any panics we find.
     fn propagate_panics(&mut self) {
-        // precondition: All threads should be finished by now:
-        assert!(self.output.next().is_none());
-        
+        // Drop our output iterator. Allows threads to end gracefully. Which is required because
+        // we're about to join on them:
         use std::mem;
+        mem::drop(self.output.take());
+        
         let workers = mem::replace(&mut self.worker_threads, Vec::new());
         for joiner in workers {
             let panic_err = match joiner.join() {
@@ -184,7 +190,7 @@ fn panic_msg_from<'a>(panic_data: &'a Any) -> &'a str {
     "<Unrecoverable panic message.>"
 }
 
-impl<T> std::iter::Iterator for PipelineIter<T> {
+impl<T> std::iter::Iterator for PipelineIter<Result<T,()>> {
     type Item = T;
     
     /// Iterates through executor results.
@@ -194,11 +200,36 @@ impl<T> std::iter::Iterator for PipelineIter<T> {
     /// This is because, in that case, you can't be sure you've received a result for
     /// each of your inputs.
     fn next(&mut self) -> Option<Self::Item> {
-        let next = self.output.next();
-        if next.is_none() {
-            self.propagate_panics();
-        }
-        return next;
+        
+        // We may or may not have an output iterator. (it's an Option)
+        // If not, we're done. If yes, grab the next value from it. (also an Option)
+        let next = {
+            // borrowing by ref from self, limit scope:
+            let mut output = match self.output {
+                None => return None,
+                Some(ref mut output) => output,
+            };
+            output.next()
+        };
+        let next_result = match next {
+            Some(result) => result,
+            None => {
+                // We've reached the end of our output:
+                self.propagate_panics(); 
+                return None
+            },
+        };
+        let next_value = match next_result {
+            Ok(value) => value,
+            // This indicates that one of our worker threads panicked.
+            // That means its thread has died due to panic. We don't want to continue operating
+            // in degraded mode for who knows how long. We'll just fail fast:
+            Err(_) => {
+                self.propagate_panics();
+                return None;
+            }
+        };
+        Some(next_value)
     }
 }
 
