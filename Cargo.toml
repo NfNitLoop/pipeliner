@@ -10,4 +10,4 @@ repository = "https://github.com/NfNitLoop/pipeliner"
 documentation = "https://docs.rs/pipeliner/"
 
 [dependencies]
-# None! :)
+num_cpus = "1.6"

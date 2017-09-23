@@ -11,14 +11,14 @@
 //!  * No `unsafe` code.
 //!
 //! Since `IntoIterator`s implement [Pipeline], you can, for example:
-//! 
+//!
 //! ```
 //! use pipeliner::Pipeline;
 //! for result in (0..100).with_threads(10).map(|x| x + 1) {
 //!     println!("result: {}", result);
 //! }
 //! ```
-//! 
+//!
 //! And, since the output is also an iterator, you can easily create a pipeline
 //! with varying number of threads for each step of work:
 //!
@@ -31,13 +31,15 @@
 //! // But you might want lower thread usage for cpu-bound work:
 //! .with_threads(4).out_buffer(100).map(|x| {
 //!     x * x // ow my CPUs :p
-//! }); 
+//! });
 //! for result in results {
 //!     println!("result: {}", result);
 //! }
 //! ```
 //!
 //! [Pipeline]: trait.Pipeline.html
+
+extern crate num_cpus;
 
 #[cfg(test)]
 mod tests;
@@ -64,7 +66,7 @@ where Ii: IntoIterator<Item=In, IntoIter=It>,
       In: Send + 'static
 {
     fn with_threads(self, num_threads: usize) -> PipelineBuilder<It, In> {
-        PipelineBuilder::new(self.into_iter()).num_threads(num_threads) 
+        PipelineBuilder::new(self.into_iter()).num_threads(num_threads)
     }
 }
 
@@ -73,7 +75,7 @@ where Ii: IntoIterator<Item=In, IntoIter=It>,
 pub struct PipelineBuilder<It: Iterator<Item=In>, In: Send + 'static> {
     // The inner iterator which yields the input values
     input: It,
-    
+
     // Options:
     num_threads: usize,
     out_buffer: usize,
@@ -82,21 +84,25 @@ pub struct PipelineBuilder<It: Iterator<Item=In>, In: Send + 'static> {
 impl<It, In> PipelineBuilder<It, In>
 where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
 {
-    
+
     fn new(iterator: It) -> Self {
         PipelineBuilder {
             input: iterator,
-            num_threads: 1, 
+            num_threads: 1,
             out_buffer: 0,
         }
     }
     /// Set how many worker threads should be used to perform this work.
-    /// A value of 0 is interpreted as 1.
+    /// A value of 0 is interpreted as the system's thread count.
     pub fn num_threads(mut self, num_threads: usize) -> Self {
-        self.num_threads = std::cmp::max(1, num_threads);
+        self.num_threads = if num_threads == 0 {
+            num_cpus::get()
+        } else {
+            num_threads
+        };
         self
     }
-    
+
     /// Set how many output values to cache. The default, 0, results in synchronous output.
     /// Note that in effect each thread caches its output as it waits to send it, so
     /// in many cases you may not need additional output buffering.
@@ -104,7 +110,7 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
         self.out_buffer = size;
         self
     }
-    
+
     /// Perform work on the input, and make the results available via the PipelineIterator.
     /// Note that unlike in `Iterator`s, this map does not preserve the ordering of the input.
     /// This allows results to be consumed as soon as they become available.
@@ -112,23 +118,23 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
     where Out: Send + 'static, F: Fn(In) -> Out + Send + Sync + 'static
     {
         let PipelineBuilder{input, num_threads, out_buffer} = self;
-        
+
         let input = SharedIterator::wrap(input);
-        
+
         let (output_tx, output_rx) = sync_channel(out_buffer);
         let callable = Arc::new(callable);
-                
+
         let mut iter = PipelineIter {
-            output: Some(output_rx.into_iter()), 
+            output: Some(output_rx.into_iter()),
             worker_threads: Vec::with_capacity(num_threads),
         };
-        
+
         // Spawn N worker threads.
         for _ in 0..num_threads {
             let input = input.clone();
             let output_tx = PanicGuard::new(output_tx.clone());
             let callable = callable.clone();
-            
+
             iter.worker_threads.push(spawn(move || {
                 for value in input {
                     // TODO: Handle panics and send them down the wire.
@@ -138,7 +144,7 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
                         // The receiver is closed. No need to continue.
                         break;
                     }
-                } 
+                }
             })); // worker
         } // spawning threads
         iter
@@ -161,7 +167,7 @@ impl<T> PipelineIter<T> {
         // we're about to join on them:
         use std::mem;
         mem::drop(self.output.take());
-        
+
         let workers = mem::replace(&mut self.worker_threads, Vec::new());
         for joiner in workers {
             let panic_err = match joiner.join() {
@@ -177,30 +183,30 @@ impl<T> PipelineIter<T> {
 use std::any::Any;
 
 /// Try to reconstruct a panic message from the original:
-// Thanks to kimundi on #rust-beginners for helping me sort this out. :) 
-fn panic_msg_from<'a>(panic_data: &'a Any) -> &'a str {    
-    
+// Thanks to kimundi on #rust-beginners for helping me sort this out. :)
+fn panic_msg_from<'a>(panic_data: &'a Any) -> &'a str {
+
     if let Some(msg) = panic_data.downcast_ref::<&'static str>() {
         return msg;
     }
     if let Some(msg) = panic_data.downcast_ref::<String>() {
         return msg.as_str();
     }
-    
+
     "<Unrecoverable panic message.>"
 }
 
 impl<T> std::iter::Iterator for PipelineIter<Result<T,()>> {
     type Item = T;
-    
+
     /// Iterates through executor results.
-    /// 
+    ///
     /// # Panics #
     /// Note, this call will panic if any of the worker threads panicked.
     /// This is because, in that case, you can't be sure you've received a result for
     /// each of your inputs.
     fn next(&mut self) -> Option<Self::Item> {
-        
+
         // We may or may not have an output iterator. (it's an Option)
         // If not, we're done. If yes, grab the next value from it. (also an Option)
         let next = {
@@ -215,7 +221,7 @@ impl<T> std::iter::Iterator for PipelineIter<Result<T,()>> {
             Some(result) => result,
             None => {
                 // We've reached the end of our output:
-                self.propagate_panics(); 
+                self.propagate_panics();
                 return None
             },
         };
@@ -243,8 +249,8 @@ impl<I: Iterator> SharedIterator<std::iter::Fuse<I>> {
     fn wrap(iterator: I) -> Self {
         // Since we're going to be sharing among multiple threads, each thread will need to
         // get a None of its own to end. We need to make sure our iterator doesn't cycle:
-        let iterator = iterator.fuse(); 
-        
+        let iterator = iterator.fuse();
+
         SharedIterator{iterator: Arc::new(Mutex::new(iterator))}
     }
 }
@@ -257,7 +263,7 @@ impl<I: Iterator> Clone for SharedIterator<I> {
 
 impl<I: Iterator> Iterator for SharedIterator<I> {
     type Item = I::Item;
-    
+
     fn next(&mut self) -> Option<Self::Item> {
         let mut iterator = self.iterator.lock().expect("No poisoning in SharedIterator");
         iterator.next()
