@@ -108,7 +108,7 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
     /// Perform work on the input, and make the results available via the PipelineIterator.
     /// Note that unlike in `Iterator`s, this map does not preserve the ordering of the input.
     /// This allows results to be consumed as soon as they become available.
-    pub fn map<F, Out>(self, callable: F) -> PipelineIter<Result<Out,()>>
+    pub fn map<F, Out>(self, callable: F) -> impl Iterator<Item=Out>
     where Out: Send + 'static, F: Fn(In) -> Out + Send + Sync + 'static
     {
         let PipelineBuilder{input, num_threads, out_buffer} = self;
@@ -145,7 +145,7 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
     }
 }
 
-pub struct PipelineIter<Out>
+struct PipelineIter<Out>
 {
     // This is optional because we may want to drop it to cause our threads to die gracefully:
     output: Option<mpsc::IntoIter<Out>>,
@@ -235,17 +235,21 @@ impl<T> std::iter::Iterator for PipelineIter<Result<T,()>> {
 
 /// An iterator which can be safely shared between threads.
 struct SharedIterator<I: Iterator> {
-    iterator: Arc<Mutex<I>>,
+    // Since we're going to be sharing among multiple threads, each thread will
+    // need to get a None of its own to know we've reached the end of the input.
+    // For that, we use a Fused iterator here:
+    iterator: Arc<Mutex<std::iter::Fuse<I>>>,
 }
 
-// TODO: It feels weird to leak that I'm using Fuse in the impl interface here:
-impl<I: Iterator> SharedIterator<std::iter::Fuse<I>> {
+impl<I: Iterator> SharedIterator<I> {
     fn wrap(iterator: I) -> Self {
-        // Since we're going to be sharing among multiple threads, each thread will need to
-        // get a None of its own to end. We need to make sure our iterator doesn't cycle:
-        let iterator = iterator.fuse(); 
-        
-        SharedIterator{iterator: Arc::new(Mutex::new(iterator))}
+        SharedIterator{
+            iterator: Arc::new(
+                Mutex::new(
+                    iterator.fuse()
+                )
+            )
+        }
     }
 }
 
