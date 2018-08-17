@@ -1,3 +1,4 @@
+#![cfg(test)]
 use super::*;
 
 use std::{thread, time};

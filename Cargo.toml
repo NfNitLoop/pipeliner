@@ -11,3 +11,10 @@ documentation = "https://docs.rs/pipeliner/"
 
 [dependencies]
 # None! :)
+
+[features]
+default = []
+
+# Enabled when running benchmarks:
+# to run: rustup run nightly cargo bench --features benchmark
+benchmark = []
