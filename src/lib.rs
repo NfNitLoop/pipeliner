@@ -39,13 +39,7 @@
 //!
 //! [Pipeline]: trait.Pipeline.html
 
-// Required by the benchmarks module:
-#![cfg_attr(feature = "benchmark", feature(test))]
-#[cfg(feature = "benchmark")]
-extern crate test;
-
 mod tests;
-mod benchmarks;
 mod panic_guard;
 
 use std::sync::{Arc, Mutex};
