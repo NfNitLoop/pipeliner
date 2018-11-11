@@ -50,40 +50,41 @@ use std::thread::spawn;
 use panic_guard::*;
 
 /// Things which implement this can be used with the Pipeliner library.
-pub trait Pipeline<It, In>
-where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
+pub trait Pipeline<I>
+where I: Iterator + Send + 'static, I::Item: Send + 'static
 {
     /// Returns an PipelineBuilder that will execute using this many threads, and 0 buffering.
-    fn with_threads(self, num_threads: usize) -> PipelineBuilder<It, In>;
+    fn with_threads(self, num_threads: usize) -> PipelineBuilder<I>;
 }
 
 /// IntoIterators (and Iterators!) can be used as a Pipeline.
-impl<Ii,It,In> Pipeline<It, In> for Ii
-where Ii: IntoIterator<Item=In, IntoIter=It>,
-      It: Iterator<Item=In> + Send + 'static,
-      In: Send + 'static
+impl<Ii> Pipeline<Ii::IntoIter> for Ii
+where Ii: IntoIterator,
+      Ii::IntoIter: Send + 'static,
+      Ii::Item: Send + 'static
 {
-    fn with_threads(self, num_threads: usize) -> PipelineBuilder<It, In> {
+    fn with_threads(self, num_threads: usize) -> PipelineBuilder<Ii::IntoIter> {
         PipelineBuilder::new(self.into_iter()).num_threads(num_threads) 
     }
 }
 
 /// This is an intermediate data structure which allows you to configure how your pipeline
 /// should run.
-pub struct PipelineBuilder<It: Iterator<Item=In>, In: Send + 'static> {
+pub struct PipelineBuilder<I>
+where I: Iterator, I::Item: Send + 'static
+{
     // The inner iterator which yields the input values
-    input: It,
+    input: I,
     
     // Options:
     num_threads: usize,
     out_buffer: usize,
 }
 
-impl<It, In> PipelineBuilder<It, In>
-where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
+impl<I> PipelineBuilder<I>
+where I: Iterator + Send + 'static, I::Item: Send + 'static
 {
-    
-    fn new(iterator: It) -> Self {
+    fn new(iterator: I) -> Self {
         PipelineBuilder {
             input: iterator,
             num_threads: 1, 
@@ -105,20 +106,46 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
         self
     }
     
-    /// Perform work on the input, and make the results available via the PipelineIterator.
+    /// Perform work on the input, and make the results available via the PipelineIter.
     /// Note that unlike in `Iterator`s, this map does not preserve the ordering of the input.
     /// This allows results to be consumed as soon as they become available.
     pub fn map<F, Out>(self, callable: F) -> impl Iterator<Item=Out>
-    where Out: Send + 'static, F: Fn(In) -> Out + Send + Sync + 'static
+    where Out: Send + 'static, F: Fn(I::Item) -> Out + Send + Sync + 'static
     {
-        let PipelineBuilder{input, num_threads, out_buffer} = self;
+        // TODO: E0282: Why do I have to declare the type here?
+        // Isn't it obvoius from the type that new() returns?
+        PipelineIter::<crossbeam_channel::IntoIter<Result<Out, ()>>>::new(self, callable)
+    }
+}
+
+// An unorderd output iterator which manages its own threads.
+
+struct PipelineIter<I>
+where I: Iterator
+{
+    // This is optional because we may want to drop it to cause our threads to die gracefully:
+    output: Option<I>,
+    worker_threads: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl<I> PipelineIter<I> 
+where I: Iterator
+{
+    fn new<F, InI, Out>(builder: PipelineBuilder<InI>, callable: F) -> PipelineIter<crossbeam_channel::IntoIter<Result<Out, ()>>>
+    where InI: Iterator + Send + 'static,
+          InI::Item: Send + 'static,
+          Out: Send + 'static,
+          F: Fn(InI::Item) -> Out + Send + Sync + 'static,
+    {
+        let PipelineBuilder{input, num_threads, out_buffer} = builder;
         
         let input = SharedIterator::wrap(input);
         
         let (output_tx, output_rx) = crossbeam_channel::bounded(out_buffer);
         let callable = Arc::new(callable);
                 
-        let mut iter = PipelineIter {
+        let mut iter: PipelineIter<crossbeam_channel::IntoIter<Result<Out, ()>>>;
+        iter = PipelineIter {
             output: Some(output_rx.into_iter()), 
             worker_threads: Vec::with_capacity(num_threads),
         };
@@ -144,16 +171,7 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
         } // spawning threads
         iter
     }
-}
 
-struct PipelineIter<I: Iterator>
-{
-    // This is optional because we may want to drop it to cause our threads to die gracefully:
-    output: Option<I>,
-    worker_threads: Vec<std::thread::JoinHandle<()>>,
-}
-
-impl<I: Iterator> PipelineIter<I> {
     /// Makes panics that were experienced in the worker/producer threads visible on the
     /// consumer thread. Calling this function ends output -- we will wait for threads to finish
     /// and propagate any panics we find.
@@ -191,9 +209,9 @@ fn panic_msg_from<'a>(panic_data: &'a Any) -> &'a str {
     "<Unrecoverable panic message.>"
 }
 
-impl<T, I> std::iter::Iterator for PipelineIter<I> 
-where I: Iterator<Item=Result<T,()>> {
-    type Item = T;
+impl<I> std::iter::Iterator for PipelineIter<I> 
+where I: Iterator, I::Item: ResultTrait {
+    type Item = <I::Item as ResultTrait>::Ok;
     
     /// Iterates through executor results.
     /// 
@@ -221,7 +239,7 @@ where I: Iterator<Item=Result<T,()>> {
                 return None
             },
         };
-        let next_value = match next_result {
+        let next_value = match next_result.result() {
             Ok(value) => value,
             // This indicates that one of our worker threads panicked.
             // That means its thread has died due to panic. We don't want to continue operating
@@ -270,3 +288,19 @@ impl<I: Iterator> Iterator for SharedIterator<I> {
     }
 }
 
+// This lets me access a Result's Ok/Err types as associated types:
+trait ResultTrait {
+    type Ok;
+    type Err;
+
+    // Get access to the underlying result:
+    fn result(self) -> Result<Self::Ok, Self::Err>;
+}
+
+impl<O, E> ResultTrait for Result<O, E> {
+    type Ok = O;
+    type Err = E;
+
+    #[inline]
+    fn result(self) -> Result<Self::Ok, Self::Err> { self }
+}
