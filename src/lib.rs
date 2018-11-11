@@ -43,7 +43,7 @@ mod tests;
 mod panic_guard;
 
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, sync_channel};
+use std::sync::mpsc::{sync_channel};
 use std::thread::spawn;
 
 use panic_guard::*;
@@ -130,11 +130,12 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
             
             iter.worker_threads.push(spawn(move || {
                 for value in input {
-                    // TODO: Handle panics and send them down the wire.
                     let output = callable(value);
                     let result = output_tx.send(output);
                     if result.is_err() {
-                        // The receiver is closed. No need to continue.
+                        // The receiver is closed (has likely been dropped).
+                        // No need to continue. Exit our threads to free
+                        // up thread/channel resources.
                         break;
                     }
                 } 
@@ -144,14 +145,14 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
     }
 }
 
-struct PipelineIter<Out>
+struct PipelineIter<I: Iterator>
 {
     // This is optional because we may want to drop it to cause our threads to die gracefully:
-    output: Option<mpsc::IntoIter<Out>>,
+    output: Option<I>,
     worker_threads: Vec<std::thread::JoinHandle<()>>,
 }
 
-impl<T> PipelineIter<T> {
+impl<I: Iterator> PipelineIter<I> {
     /// Makes panics that were experienced in the worker/producer threads visible on the
     /// consumer thread. Calling this function ends output -- we will wait for threads to finish
     /// and propagate any panics we find.
@@ -189,7 +190,8 @@ fn panic_msg_from<'a>(panic_data: &'a Any) -> &'a str {
     "<Unrecoverable panic message.>"
 }
 
-impl<T> std::iter::Iterator for PipelineIter<Result<T,()>> {
+impl<T, I> std::iter::Iterator for PipelineIter<I> 
+where I: Iterator<Item=Result<T,()>> {
     type Item = T;
     
     /// Iterates through executor results.

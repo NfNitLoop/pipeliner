@@ -12,7 +12,7 @@ use pipeliner::Pipeline;
 // We're really testing the underlying channel implementation.
 // (And: currently, sync::Mutex I've added to simulate spmc. Sorry. :p)
 #[bench]
-fn benchmark(b: &mut Bencher) {
+fn sending_and_receiving(b: &mut Bencher) {
     let iterations = black_box(10_000);
     let threads = black_box(4);
 
