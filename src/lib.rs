@@ -39,11 +39,12 @@
 //!
 //! [Pipeline]: trait.Pipeline.html
 
+extern crate crossbeam_channel;
+
 mod tests;
 mod panic_guard;
 
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{sync_channel};
 use std::thread::spawn;
 
 use panic_guard::*;
@@ -114,7 +115,7 @@ where It: Iterator<Item=In> + Send + 'static, In: Send + 'static
         
         let input = SharedIterator::wrap(input);
         
-        let (output_tx, output_rx) = sync_channel(out_buffer);
+        let (output_tx, output_rx) = crossbeam_channel::bounded(out_buffer);
         let callable = Arc::new(callable);
                 
         let mut iter = PipelineIter {

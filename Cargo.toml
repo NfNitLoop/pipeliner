@@ -10,4 +10,5 @@ repository = "https://github.com/NfNitLoop/pipeliner"
 documentation = "https://docs.rs/pipeliner/"
 
 [dependencies]
-# None! :)
+# 0.3 reintroduces the ability to know when all receivers are closed:
+crossbeam-channel = "0.3"

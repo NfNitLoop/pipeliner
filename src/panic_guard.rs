@@ -47,6 +47,14 @@ impl<T> Sender for mpsc::SyncSender<T> {
     }
 }
 
+impl <T> Sender for ::crossbeam_channel::Sender<T> {
+    type Item = T;
+    type Error = ::crossbeam_channel::SendError<Self::Item>;
+    fn send(&self, t: Self::Item) -> Result<(), Self::Error> {
+        ::crossbeam_channel::Sender::send(&self, t)
+    }
+}
+
 impl<T, S: Sender<Item=Result<T,()>>> Drop for PanicGuard<T,S>
 {
     fn drop(&mut self) {
