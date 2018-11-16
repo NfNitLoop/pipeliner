@@ -8,7 +8,7 @@ use std::thread::spawn;
 use PipelineBuilder;
 use panic_guard::PanicGuard;
 
-// An unorderd output iterator which manages its own threads.
+/// An unorderd output iterator which manages its own threads.
 pub(crate) struct PipelineIter<I>
 where I: Iterator
 {
@@ -20,11 +20,11 @@ where I: Iterator
 impl<I> PipelineIter<I> 
 where I: Iterator
 {
-    pub fn new<F, InI, Out>(builder: PipelineBuilder<InI>, callable: F) -> PipelineIter<crossbeam_channel::IntoIter<Result<Out, ()>>>
-    where InI: Iterator + Send + 'static,
-          InI::Item: Send + 'static,
+    pub fn new<F, Out>(builder: PipelineBuilder<I>, callable: F) -> impl Iterator<Item=Out>
+    where I: Iterator + Send + 'static,
+          I::Item: Send + 'static,
           Out: Send + 'static,
-          F: Fn(InI::Item) -> Out + Send + Sync + 'static,
+          F: Fn(I::Item) -> Out + Send + Sync + 'static,
     {
         let PipelineBuilder{input, num_threads, out_buffer} = builder;
         
@@ -33,8 +33,7 @@ where I: Iterator
         let (output_tx, output_rx) = crossbeam_channel::bounded(out_buffer);
         let callable = Arc::new(callable);
                 
-        let mut iter: PipelineIter<crossbeam_channel::IntoIter<Result<Out, ()>>>;
-        iter = PipelineIter {
+        let mut iter = PipelineIter {
             output: Some(output_rx.into_iter()), 
             worker_threads: Vec::with_capacity(num_threads),
         };
@@ -67,18 +66,21 @@ where I: Iterator
     fn propagate_panics(&mut self) {
         // Drop our output iterator. Allows threads to end gracefully. Which is required because
         // we're about to join on them:
-        use std::mem;
-        mem::drop(self.output.take());
-        
-        let workers = mem::replace(&mut self.worker_threads, Vec::new());
-        for joiner in workers {
-            let panic_err = match joiner.join() {
-                Ok(_) => continue, // no error
-                Err(err) => err,
-            };
-            let orig_msg = panic_msg_from(panic_err.as_ref());
-            panic!("Worker thread panicked with message: [{}]", orig_msg);
-        }
+        std::mem::drop(self.output.take());
+        propagate_panics(&mut self.worker_threads)
+    }
+}
+
+/// Wait for all threads to close. Panics if any of them panicked.
+pub(crate) fn propagate_panics(threads: &mut Vec<std::thread::JoinHandle<()>>) {
+    let workers = std::mem::replace(threads, Vec::new());
+    for joiner in workers {
+        let panic_err = match joiner.join() {
+            Ok(_) => continue, // no error
+            Err(err) => err,
+        };
+        let orig_msg = panic_msg_from(panic_err.as_ref());
+        panic!("Worker thread panicked with message: [{}]", orig_msg);
     }
 }
 

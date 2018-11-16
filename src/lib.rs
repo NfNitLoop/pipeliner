@@ -6,8 +6,8 @@
 //!  * Performs work in a user-specified number of threads.
 //!  * Return all output via an Iterator.
 //!  * Optionally buffer output.
-//!  * `panic`s in your worker threads are propagated out of the output Iterator. (No silent
-//!     loss of data.)
+//!  * `panic`s in your worker threads are propagated out of the output
+//!     Iterator. (No silent loss of data.)
 //!  * No `unsafe` code.
 //!
 //! Since `IntoIterator`s implement [Pipeline], you can, for example:
@@ -43,10 +43,8 @@ extern crate crossbeam_channel;
 
 mod tests;
 mod panic_guard;
+mod ordered;
 mod unordered;
-
-
-use unordered::PipelineIter;
 
 /// Things which implement this can be used with the Pipeliner library.
 pub trait Pipeline<I>
@@ -105,14 +103,27 @@ where I: Iterator + Send + 'static, I::Item: Send + 'static
         self
     }
     
-    /// Perform work on the input, and make the results available via the PipelineIter.
-    /// Note that unlike in `Iterator`s, this map does not preserve the ordering of the input.
-    /// This allows results to be consumed as soon as they become available.
+    /// Apply `callable` to items from the input Iterator and make them
+    /// available via the output iterator.
+    ///
+    /// Note that the order of items in the output Iterator may not match
+    /// the order of the input iterator. (They're returned as soon as `callable`
+    /// produces a result.) For ordered (but slower) iteration, use
+    /// `ordered_map()`.
     pub fn map<F, Out>(self, callable: F) -> impl Iterator<Item=Out>
     where Out: Send + 'static, F: Fn(I::Item) -> Out + Send + Sync + 'static
     {
-        // TODO: E0282: Why do I have to declare the type here?
-        // Isn't it obvoius from the type that new() returns?
-        PipelineIter::<crossbeam_channel::IntoIter<Result<Out, ()>>>::new(self, callable)
+        unordered::PipelineIter::new(self, callable)
+    }
+
+    /// Like `map()`, but does some extra work to ensure that results in the
+    /// output match the order of their inputs from the input Iterator.
+    /// This requires a bit more work, and may introduce head-of-line blocking
+    /// which may affect performance. If you don't require ordered results,
+    /// prefer using `map()`.
+    pub fn ordered_map<F, Out>(self, callable: F) -> impl Iterator<Item=Out>
+    where Out: Send + 'static, F: Fn(I::Item) -> Out + Send + Sync + 'static
+    {
+        ordered::new(self, callable)
     }
 }
