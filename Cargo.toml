@@ -1,6 +1,6 @@
 [package]
 name = "pipeliner"
-version = "0.1.1"
+version = "1.0.0"
 authors = ["Cody Casterline <cody.casterline@gmail.com>"]
 license = "Apache-2.0"
 

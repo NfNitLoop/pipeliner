@@ -9,11 +9,12 @@
 //!  * `panic`s in your worker threads are propagated out of the output
 //!     Iterator. (No silent loss of data.)
 //!  * No `unsafe` code.
-//!
-//! Since `IntoIterator`s implement [Pipeline], you can, for example:
 //! 
 //! ```
+//! // Import the Pipeline trait to give all Iterators and IntoIterators the 
+//! // .with_threads() method:
 //! use pipeliner::Pipeline;
+//!
 //! for result in (0..100).with_threads(10).map(|x| x + 1) {
 //!     println!("result: {}", result);
 //! }
