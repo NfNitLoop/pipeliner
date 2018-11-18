@@ -1,6 +1,6 @@
 [package]
 name = "pipeliner"
-version = "0.1.1"
+version = "1.0.0"
 authors = ["Cody Casterline <cody.casterline@gmail.com>"]
 license = "Apache-2.0"
 
@@ -10,4 +10,5 @@ repository = "https://github.com/NfNitLoop/pipeliner"
 documentation = "https://docs.rs/pipeliner/"
 
 [dependencies]
-# None! :)
+# 0.3 reintroduces the ability to know when all receivers are closed:
+crossbeam-channel = "0.3"

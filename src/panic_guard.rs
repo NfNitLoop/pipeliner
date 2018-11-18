@@ -16,28 +16,42 @@ impl<T, S: Sender<Item=Result<T,()>>> PanicGuard<T,S> {
         PanicGuard{sender: sender}
     }
     
-    pub fn send(&self, item: T) -> Result<(), mpsc::SendError<S::Item>> {
+    pub fn send(&self, item: T) -> Result<(), S::Error> {
         self.sender.send(Ok(item))
     }
 }
 
-/// A trait for the common functionality in mpsc's Sender and SyncSender.
+/// A trait for the common functionality in
+/// * mpsc::Sender
+/// * mpsc::SyncSender
+/// * crossbeam_channel::Sender
 pub trait Sender {
     type Item;
-    fn send(&self, t: Self::Item) -> Result<(), mpsc::SendError<Self::Item>>;
+    type Error;
+    fn send(&self, t: Self::Item) -> Result<(), Self::Error>;
 }
 
 impl<T> Sender for mpsc::Sender<T> {
     type Item = T;
-    fn send(&self, t: Self::Item) -> Result<(), mpsc::SendError<Self::Item>> {
+    type Error = mpsc::SendError<Self::Item>;
+    fn send(&self, t: Self::Item) -> Result<(), Self::Error> {
         mpsc::Sender::send(&self, t)
     }
 
 }
 impl<T> Sender for mpsc::SyncSender<T> {
     type Item = T;
-    fn send(&self, t: Self::Item) -> Result<(), mpsc::SendError<Self::Item>> {
+    type Error = mpsc::SendError<Self::Item>;
+    fn send(&self, t: Self::Item) -> Result<(), Self::Error> {
         mpsc::SyncSender::send(&self, t)
+    }
+}
+
+impl <T> Sender for ::crossbeam_channel::Sender<T> {
+    type Item = T;
+    type Error = ::crossbeam_channel::SendError<Self::Item>;
+    fn send(&self, t: Self::Item) -> Result<(), Self::Error> {
+        ::crossbeam_channel::Sender::send(&self, t)
     }
 }
 
