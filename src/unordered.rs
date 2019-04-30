@@ -193,5 +193,5 @@ impl<O, E> ResultTrait for Result<O, E> {
     type Err = E;
 
     #[inline]
-    fn result(self) -> Result<Self::Ok, Self::Err> { self }
+    fn result(self) -> Result<O, E> { self }
 }
