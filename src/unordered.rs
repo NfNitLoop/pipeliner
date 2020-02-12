@@ -88,7 +88,7 @@ use std::any::Any;
 
 /// Try to reconstruct a panic message from the original:
 // Thanks to kimundi on #rust-beginners for helping me sort this out. :) 
-fn panic_msg_from<'a>(panic_data: &'a Any) -> &'a str {    
+fn panic_msg_from<'a>(panic_data: &'a dyn Any) -> &'a str {
     
     if let Some(msg) = panic_data.downcast_ref::<&'static str>() {
         return msg;
@@ -116,7 +116,7 @@ where I: Iterator, I::Item: ResultTrait {
         // If not, we're done. If yes, grab the next value from it. (also an Option)
         let next = {
             // borrowing by ref from self, limit scope:
-            let mut output = match self.output {
+            let output = match self.output {
                 None => return None,
                 Some(ref mut output) => output,
             };
@@ -193,5 +193,5 @@ impl<O, E> ResultTrait for Result<O, E> {
     type Err = E;
 
     #[inline]
-    fn result(self) -> Result<Self::Ok, Self::Err> { self }
+    fn result(self) -> Result<O, E> { self }
 }

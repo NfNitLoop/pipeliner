@@ -1,6 +1,11 @@
 Changelog
 =========
 
+v1.0.1 - January 29, 2020
+-------------------------
+
+ * Fix build error with newer versions of Rust.
+
 v1.0.0 - November 18, 2018
 --------------------------
 
